@@ -1,6 +1,4 @@
 __pycache__/
 venv/
 .env
-verified.json
-sessions.json
-usage.json
+/tmp/
