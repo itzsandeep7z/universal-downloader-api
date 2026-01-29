@@ -7,9 +7,9 @@ import time
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
-VERIFIED_FILE = "verified.json"
-SESSIONS_FILE = "sessions.json"
-USAGE_FILE = "usage.json"
+VERIFIED_FILE = "/tmp/verified.json"
+SESSIONS_FILE = "/tmp/sessions.json"
+USAGE_FILE = "/tmp/usage.json"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
