@@ -1,5 +1,8 @@
-import os, time, secrets, threading
-from datetime import datetime
+import os
+import time
+import json
+import secrets
+import threading
 
 import telebot
 import yt_dlp
@@ -19,7 +22,7 @@ API_NAME = "Universal Media Downloader API"
 OWNER = "@xoxhunterxd"
 CONTACT = "https://t.me/xoxhunterxd"
 
-CACHE_TTL = 600  # 10 min
+CACHE_TTL = 600  # seconds (10 minutes)
 
 # ================= DATABASE =================
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -56,7 +59,7 @@ Base.metadata.create_all(engine)
 # ================= TELEGRAM BOT =================
 bot = telebot.TeleBot(BOT_TOKEN)
 
-def is_owner(m): 
+def is_owner(m):
     return m.from_user.id == OWNER_ID
 
 @bot.message_handler(commands=["verify"])
@@ -66,11 +69,11 @@ def verify(m):
     db = Session()
     db.merge(VerifiedUser(
         user_id=uid,
-        expires=int(time.time()) + int(days)*86400
+        expires=int(time.time()) + int(days) * 86400
     ))
     db.commit()
     db.close()
-    bot.reply_to(m, "✅ User verified")
+    bot.reply_to(m, f"✅ User {uid} verified for {days} days")
 
 @bot.message_handler(commands=["del"])
 def delete_user(m):
@@ -81,7 +84,7 @@ def delete_user(m):
     db.query(Token).filter_by(user_id=uid).delete()
     db.commit()
     db.close()
-    bot.reply_to(m, "🗑 User removed")
+    bot.reply_to(m, f"🗑 User {uid} removed")
 
 @bot.message_handler(commands=["list"])
 def list_users(m):
@@ -89,16 +92,45 @@ def list_users(m):
     db = Session()
     users = db.query(VerifiedUser).all()
     text = "📋 Verified Users\n\n"
+    now = int(time.time())
     for u in users:
-        days = max(0, (u.expires - int(time.time())) // 86400)
+        days = max(0, (u.expires - now) // 86400)
         text += f"{u.user_id} — {days} days\n"
     db.close()
     bot.reply_to(m, text or "No users")
 
+@bot.message_handler(commands=["usage"])
+def usage(m):
+    if not is_owner(m): return
+    uid = m.text.split()[1]
+    db = Session()
+    logs = db.query(UsageLog).filter_by(user_id=uid).all()
+    db.close()
+
+    platforms = {}
+    for l in logs:
+        platforms[l.platform] = platforms.get(l.platform, 0) + 1
+
+    text = f"📊 Usage for {uid}\n\nTotal: {len(logs)}\n"
+    for p, c in platforms.items():
+        text += f"{p}: {c}\n"
+
+    bot.reply_to(m, text)
+
+@bot.message_handler(commands=["remove"])
+def remove_token(m):
+    if not is_owner(m): return
+    tok = m.text.split()[1]
+    db = Session()
+    db.query(Token).filter_by(token=tok).delete()
+    db.commit()
+    db.close()
+    bot.reply_to(m, "🧹 Token removed")
+
 @bot.message_handler(commands=["token"])
 def token_cmd(m):
-    db = Session()
     uid = str(m.from_user.id)
+    db = Session()
 
     # one-token-at-a-time
     db.query(Token).filter_by(user_id=uid).delete()
@@ -123,25 +155,6 @@ def token_cmd(m):
     db.close()
     bot.reply_to(m, f"🔐 TOKEN:\n`{t}`", parse_mode="Markdown")
 
-@bot.message_handler(commands=["usage"])
-def usage(m):
-    if not is_owner(m): return
-    uid = m.text.split()[1]
-    db = Session()
-    logs = db.query(UsageLog).filter_by(user_id=uid).all()
-    db.close()
-    bot.reply_to(m, f"📊 Total usage: {len(logs)}")
-
-@bot.message_handler(commands=["remove"])
-def remove_token(m):
-    if not is_owner(m): return
-    tok = m.text.split()[1]
-    db = Session()
-    db.query(Token).filter_by(token=tok).delete()
-    db.commit()
-    db.close()
-    bot.reply_to(m, "🧹 Token removed")
-
 @bot.message_handler(commands=["cmds"])
 def cmds(m):
     if not is_owner(m): return
@@ -163,7 +176,7 @@ app = FastAPI(title=API_NAME)
 @app.get("/api/download")
 async def download(url: str = Query(None), token: str = Query(None)):
     if not url or not token:
-        return {"status": "error", "message": "Missing params"}
+        return {"status": "error", "message": "Missing parameters"}
 
     db = Session()
     t = db.query(Token).filter_by(token=token).first()
@@ -179,35 +192,56 @@ async def download(url: str = Query(None), token: str = Query(None)):
     cached = db.query(Cache).filter_by(url=url).first()
     if cached and int(time.time()) - cached.time < CACHE_TTL:
         db.close()
-        return eval(cached.response)
+        return json.loads(cached.response)
 
-    with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "format": "bestvideo+bestaudio/best"
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
+    formats = info.get("formats", [])
+
+    video_url = None
+    audio_url = None
+
+    for f in formats:
+        if f.get("vcodec") != "none" and f.get("url"):
+            video_url = f["url"]
+            break
+
+    for f in formats:
+        if f.get("acodec") != "none" and f.get("vcodec") == "none" and f.get("url"):
+            audio_url = f["url"]
+            break
+
     result = {
-        "Developed By": OWNER,
-        
         "status": "success",
         "platform": info.get("extractor_key"),
         "title": info.get("title"),
         "duration": info.get("duration"),
         "filesize": info.get("filesize") or info.get("filesize_approx"),
         "thumbnail": info.get("thumbnail"),
-        "video": info.get("url"),
-        "audio": next(
-            (f["url"] for f in info.get("formats", [])
-             if f.get("acodec") != "none"),
-            None
-        )
+        "video": video_url,
+        "audio": audio_url
     }
 
-    db.add(Cache(url=url, response=str(result), time=int(time.time())))
+    db.add(Cache(
+        url=url,
+        response=json.dumps(result),
+        time=int(time.time())
+    ))
+
     db.add(UsageLog(
         user_id=t.user_id,
         platform=result["platform"],
         url=url,
         time=int(time.time())
     ))
+
     db.commit()
     db.close()
     return result
@@ -218,4 +252,4 @@ def start_bot():
 threading.Thread(target=start_bot, daemon=True).start()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
