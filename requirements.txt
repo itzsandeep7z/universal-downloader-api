@@ -2,3 +2,5 @@ fastapi
 uvicorn
 yt-dlp
 pyTelegramBotAPI
+sqlalchemy
+psycopg2-binary
