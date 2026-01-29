@@ -6,7 +6,7 @@ import time
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
-KEYS_FILE = "keys.json"
+KEYS_FILE = os.getenv("KEYS_PATH", "keys.json")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
