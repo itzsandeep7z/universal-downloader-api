@@ -8,15 +8,14 @@ import yt_dlp
 import telebot
 import uvicorn
 from fastapi import FastAPI, Query
-from sqlalchemy import (
-    create_engine, Column, Integer, String, BigInteger, Text
-)
+from sqlalchemy import create_engine, Column, Integer, String, BigInteger, Text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# ================== CONFIG ==================
+# ================== ENV CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
+RUN_BOT = os.getenv("RUN_BOT", "true") == "true"
 
 API_NAME = "Universal Downloader API"
 OWNER = "@xoxhunterxd"
@@ -62,7 +61,7 @@ class Cache(Base):
 Base.metadata.create_all(engine)
 
 # ================== TELEGRAM BOT ==================
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 
 
 def is_owner(m):
@@ -92,12 +91,10 @@ def verify(m):
         return
     _, uid, days = m.text.split()
     db = Session()
-    db.merge(
-        VerifiedUser(
-            user_id=uid,
-            expires=int(time.time()) + int(days) * 86400
-        )
-    )
+    db.merge(VerifiedUser(
+        user_id=uid,
+        expires=int(time.time()) + int(days) * 86400
+    ))
     db.commit()
     db.close()
     bot.reply_to(m, f"✅ Verified {uid} for {days} days")
@@ -137,10 +134,9 @@ def usage(m):
         return
     uid = m.text.split()[1]
     db = Session()
-    logs = db.query(UsageLog).filter_by(user_id=uid).all()
+    count = db.query(UsageLog).filter_by(user_id=uid).count()
     db.close()
-    text = f"📊 Usage for {uid}\nTotal: {len(logs)}"
-    bot.reply_to(m, text)
+    bot.reply_to(m, f"📊 Usage for {uid}\nTotal requests: {count}")
 
 
 @bot.message_handler(commands=["remove"])
@@ -204,13 +200,11 @@ async def download(url: str = Query(None), token: str = Query(None)):
             "telegram": CONTACT
         }
 
-    # -------- CACHE CHECK --------
     cached = db.query(Cache).filter_by(url=url).first()
     if cached and int(time.time()) - cached.time < CACHE_TTL:
         db.close()
         return json.loads(cached.response)
 
-    # -------- YT-DLP --------
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
@@ -244,39 +238,35 @@ async def download(url: str = Query(None), token: str = Query(None)):
         "audio": audio_url
     }
 
-    # -------- CACHE UPSERT (FIXED) --------
     if cached:
         cached.response = json.dumps(result)
         cached.time = int(time.time())
     else:
-        db.add(
-            Cache(
-                url=url,
-                response=json.dumps(result),
-                time=int(time.time())
-            )
-        )
-
-    db.add(
-        UsageLog(
-            user_id=t.user_id,
-            platform=result["platform"],
+        db.add(Cache(
             url=url,
+            response=json.dumps(result),
             time=int(time.time())
-        )
-    )
+        ))
+
+    db.add(UsageLog(
+        user_id=t.user_id,
+        platform=result["platform"],
+        url=url,
+        time=int(time.time())
+    ))
 
     db.commit()
     db.close()
     return result
 
 
-# ================== START BOTH ==================
+# ================== START SERVICES ==================
 def start_bot():
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending=True)
 
 
-threading.Thread(target=start_bot, daemon=True).start()
+if RUN_BOT:
+    threading.Thread(target=start_bot, daemon=True).start()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
