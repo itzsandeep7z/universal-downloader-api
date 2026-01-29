@@ -6,21 +6,24 @@ import time
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
-KEYS_FILE = os.getenv("KEYS_PATH", "keys.json")
+KEYS_FILE = os.getenv("KEYS_PATH", "/tmp/keys.json")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ---------- UTILS ----------
-def is_owner(message):
-    return message.from_user.id == OWNER_ID
+# ---------- STORAGE (FIXED) ----------
+def ensure_keys_file():
+    os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
+    if not os.path.exists(KEYS_FILE):
+        with open(KEYS_FILE, "w") as f:
+            json.dump({}, f)
 
 def load_keys():
-    if not os.path.exists(KEYS_FILE):
-        return {}
+    ensure_keys_file()
     with open(KEYS_FILE, "r") as f:
         return json.load(f)
 
 def save_keys(data):
+    ensure_keys_file()
     with open(KEYS_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -38,6 +41,10 @@ def cleanup_expired():
         save_keys(keys)
 
     return removed
+
+# ---------- UTILS ----------
+def is_owner(message):
+    return message.from_user.id == OWNER_ID
 
 # ---------- /cmds ----------
 @bot.message_handler(commands=["cmds"])
@@ -152,9 +159,7 @@ def info(message):
 
     bot.reply_to(
         message,
-        f"🔑 `{key}`\n"
-        f"Used: {data['used']}\n"
-        f"Days left: {left}",
+        f"🔑 `{key}`\nUsed: {data['used']}\nDays left: {left}",
         parse_mode="Markdown"
     )
 
