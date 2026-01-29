@@ -1,12 +1,13 @@
-from fastapi import FastAPI, Query, Header, HTTPException
+from fastapi import FastAPI, Query
 import yt_dlp
 import json
 import os
 import time
 
 API_NAME = "Universal Media Downloader API"
-API_VERSION = "1.2.0"
+API_VERSION = "1.3.0"
 DEVELOPER = "@xoxhunterxd"
+CONTACT_TG = "https://t.me/xoxhunterxd"
 
 KEYS_FILE = "keys.json"
 
@@ -25,35 +26,56 @@ def save_keys(data):
 
 def validate_key(api_key: str):
     keys = load_keys()
-
-    if api_key not in keys:
-        return False, "Invalid API key"
-
-    key_data = keys[api_key]
     now = int(time.time())
 
-    if now > key_data["expires"]:
-        return False, "API key expired"
+    if not api_key:
+        return False, "missing"
+
+    if api_key not in keys:
+        return False, "invalid"
+
+    if now > keys[api_key]["expires"]:
+        return False, "expired"
 
     # increment usage
-    key_data["used"] += 1
-    keys[api_key] = key_data
+    keys[api_key]["used"] += 1
     save_keys(keys)
 
     return True, None
 
-# ---------- UNIVERSAL API ----------
+# ---------- STYLISH BLOCK RESPONSE ----------
+def blocked_response(reason):
+    messages = {
+        "missing": "❌ API key missing",
+        "invalid": "❌ Invalid API key",
+        "expired": "⏰ API key expired"
+    }
+
+    return {
+        "status": "blocked",
+        "reason": reason,
+        "message": messages.get(reason, "❌ Access denied"),
+        "help": "🔑 This API is protected. Contact owner for access.",
+        "contact_owner": DEVELOPER,
+        "telegram": CONTACT_TG
+    }
+
+# ---------- UNIVERSAL DOWNLOAD API ----------
 @app.get("/api/download")
 async def download_api(
-    url: str = Query(..., description="Any public social media URL"),
-    x_api_key: str = Header(None)
+    url: str = Query(None, description="Any public social media URL"),
+    key: str = Query(None, description="API Key")
 ):
-    if not x_api_key:
-        raise HTTPException(status_code=403, detail="API key required")
-
-    valid, error = validate_key(x_api_key)
+    valid, reason = validate_key(key)
     if not valid:
-        raise HTTPException(status_code=403, detail=error)
+        return blocked_response(reason)
+
+    if not url:
+        return {
+            "status": "error",
+            "message": "❌ Missing URL parameter",
+            "example": "/api/download?key=APIKEY&url=LINK"
+        }
 
     ydl_opts = {
         "quiet": True,
@@ -84,4 +106,3 @@ async def download_api(
             "developer": DEVELOPER,
             "message": str(e)
         }
-# ---------- RUN SERVER ----------
