@@ -4,8 +4,9 @@ import json
 import os
 import time
 
+# ================= CONFIG =================
 API_NAME = "Universal Media Downloader API"
-API_VERSION = "1.3.0"
+API_VERSION = "1.4.0"
 DEVELOPER = "@xoxhunterxd"
 CONTACT_TG = "https://t.me/xoxhunterxd"
 
@@ -13,7 +14,7 @@ KEYS_FILE = "keys.json"
 
 app = FastAPI(title=API_NAME)
 
-# ---------- KEY UTILS ----------
+# ================= KEY UTILITIES =================
 def load_keys():
     if not os.path.exists(KEYS_FILE):
         return {}
@@ -24,7 +25,21 @@ def save_keys(data):
     with open(KEYS_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
+def cleanup_expired():
+    keys = load_keys()
+    now = int(time.time())
+    changed = False
+
+    for k in list(keys.keys()):
+        if now > keys[k]["expires"]:
+            del keys[k]
+            changed = True
+
+    if changed:
+        save_keys(keys)
+
 def validate_key(api_key: str):
+    cleanup_expired()
     keys = load_keys()
     now = int(time.time())
 
@@ -43,7 +58,7 @@ def validate_key(api_key: str):
 
     return True, None
 
-# ---------- STYLISH BLOCK RESPONSE ----------
+# ================= STYLISH BLOCK RESPONSE =================
 def blocked_response(reason):
     messages = {
         "missing": "❌ API key missing",
@@ -60,11 +75,11 @@ def blocked_response(reason):
         "telegram": CONTACT_TG
     }
 
-# ---------- UNIVERSAL DOWNLOAD API ----------
+# ================= MAIN API =================
 @app.get("/api/download")
 async def download_api(
     url: str = Query(None, description="Any public social media URL"),
-    key: str = Query(None, description="API Key")
+    key: str = Query(None, description="API key")
 ):
     valid, reason = validate_key(key)
     if not valid:
@@ -73,13 +88,14 @@ async def download_api(
     if not url:
         return {
             "status": "error",
-            "message": "❌ Missing URL parameter",
-            "example": "/api/download?key=APIKEY&url=LINK"
+            "message": "❌ Missing url parameter",
+            "example": "/api/download?key=APIKEY&url=MEDIA_LINK"
         }
 
     ydl_opts = {
         "quiet": True,
-        "skip_download": True
+        "skip_download": True,
+        "nocheckcertificate": True
     }
 
     try:
@@ -106,3 +122,14 @@ async def download_api(
             "developer": DEVELOPER,
             "message": str(e)
         }
+
+# ================= ROOT INFO (OPTIONAL) =================
+@app.get("/")
+async def root():
+    return {
+        "api": API_NAME,
+        "version": API_VERSION,
+        "developer": DEVELOPER,
+        "contact": CONTACT_TG,
+        "usage": "/api/download?key=APIKEY&url=MEDIA_LINK"
+    }
