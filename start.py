@@ -21,6 +21,5 @@ t2 = threading.Thread(target=run_bot)
 t1.start()
 t2.start()
 
-# Keep main process alive
 while True:
     time.sleep(60)
