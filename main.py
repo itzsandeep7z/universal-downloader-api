@@ -4,15 +4,17 @@ import json
 import os
 import time
 
+# ================= CONFIG =================
 API_NAME = "Universal Media Downloader API"
 OWNER = "@xoxhunterxd"
 CONTACT = "https://t.me/xoxhunterxd"
 
+OWNER_TOKEN = os.getenv("OWNER_TOKEN")
 SESSIONS_FILE = "sessions.json"
 
 app = FastAPI(title=API_NAME)
 
-# ---------- SESSION UTILS ----------
+# ================= SESSION UTILS =================
 def load_sessions():
     if not os.path.exists(SESSIONS_FILE):
         return {}
@@ -23,7 +25,11 @@ def save_sessions(data):
     with open(SESSIONS_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-def validate_token(token):
+def validate_token(token: str):
+    # 👑 OWNER TOKEN (NO EXPIRY)
+    if OWNER_TOKEN and token == OWNER_TOKEN:
+        return True
+
     if not token:
         return False
 
@@ -40,7 +46,7 @@ def validate_token(token):
 
     return True
 
-# ---------- API ----------
+# ================= API =================
 @app.get("/api/download")
 async def download(
     url: str = Query(None),
@@ -69,4 +75,13 @@ async def download(
         "title": info.get("title"),
         "thumbnail": info.get("thumbnail"),
         "media_url": info.get("url")
+    }
+
+@app.get("/")
+def root():
+    return {
+        "api": API_NAME,
+        "auth": "Telegram verified users + owner token",
+        "usage": "/api/download?token=TOKEN&url=LINK",
+        "contact": CONTACT
     }
