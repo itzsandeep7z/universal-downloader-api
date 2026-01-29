@@ -1,187 +1,152 @@
-import threading
-import time
-import os
-import json
-import secrets
+import os, time, secrets, threading
+from datetime import datetime
 
 import telebot
-from fastapi import FastAPI, Query
 import yt_dlp
 import uvicorn
+from fastapi import FastAPI, Query
+from sqlalchemy import (
+    create_engine, Column, Integer, String, BigInteger, Text
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 API_NAME = "Universal Media Downloader API"
 OWNER = "@xoxhunterxd"
 CONTACT = "https://t.me/xoxhunterxd"
 
-BASE = "/tmp"
-VERIFIED_FILE = f"{BASE}/verified.json"
-SESSIONS_FILE = f"{BASE}/sessions.json"
-USAGE_FILE = f"{BASE}/usage.json"
-CACHE_FILE = f"{BASE}/cache.json"
+CACHE_TTL = 600  # 10 min
 
-CACHE_TTL = 600  # seconds (10 minutes)
+# ================= DATABASE =================
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+Session = sessionmaker(bind=engine)
+Base = declarative_base()
 
-# ================= FILE HELPERS =================
-def ensure(path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            json.dump({}, f)
+class VerifiedUser(Base):
+    __tablename__ = "verified_users"
+    user_id = Column(String, primary_key=True)
+    expires = Column(BigInteger)
 
-def load(path):
-    ensure(path)
-    with open(path, "r") as f:
-        return json.load(f)
+class Token(Base):
+    __tablename__ = "tokens"
+    token = Column(String, primary_key=True)
+    user_id = Column(String)
+    expires = Column(BigInteger, nullable=True)
 
-def save(path, data):
-    ensure(path)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+class UsageLog(Base):
+    __tablename__ = "usage_logs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String)
+    platform = Column(String)
+    url = Column(Text)
+    time = Column(BigInteger)
 
-def autoclean():
-    now = int(time.time())
-    verified = load(VERIFIED_FILE)
-    sessions = load(SESSIONS_FILE)
+class Cache(Base):
+    __tablename__ = "cache"
+    url = Column(Text, primary_key=True)
+    response = Column(Text)
+    time = Column(BigInteger)
 
-    for u in list(verified):
-        if now > verified[u]["expires"]:
-            del verified[u]
-
-    for t in list(sessions):
-        exp = sessions[t]["expires"]
-        if exp is not None and now > exp:
-            del sessions[t]
-
-    save(VERIFIED_FILE, verified)
-    save(SESSIONS_FILE, sessions)
+Base.metadata.create_all(engine)
 
 # ================= TELEGRAM BOT =================
 bot = telebot.TeleBot(BOT_TOKEN)
 
-def is_owner(msg):
-    return msg.from_user.id == OWNER_ID
+def is_owner(m): 
+    return m.from_user.id == OWNER_ID
 
 @bot.message_handler(commands=["verify"])
-def verify(msg):
-    if not is_owner(msg):
-        return
-    parts = msg.text.split()
-    if len(parts) != 3:
-        return
-    uid, days = parts[1], int(parts[2])
-    verified = load(VERIFIED_FILE)
-    verified[uid] = {"expires": int(time.time()) + days * 86400}
-    save(VERIFIED_FILE, verified)
-    bot.reply_to(msg, f"✅ User {uid} verified for {days} days")
+def verify(m):
+    if not is_owner(m): return
+    _, uid, days = m.text.split()
+    db = Session()
+    db.merge(VerifiedUser(
+        user_id=uid,
+        expires=int(time.time()) + int(days)*86400
+    ))
+    db.commit()
+    db.close()
+    bot.reply_to(m, "✅ User verified")
 
 @bot.message_handler(commands=["del"])
-def delete_user(msg):
-    if not is_owner(msg):
-        return
-    uid = msg.text.split()[1]
-    verified = load(VERIFIED_FILE)
-    sessions = load(SESSIONS_FILE)
-
-    verified.pop(uid, None)
-    for t in list(sessions):
-        if sessions[t]["user_id"] == uid:
-            del sessions[t]
-
-    save(VERIFIED_FILE, verified)
-    save(SESSIONS_FILE, sessions)
-    bot.reply_to(msg, f"🗑 User {uid} removed")
-
-@bot.message_handler(commands=["remove"])
-def remove_token(msg):
-    if not is_owner(msg):
-        return
-    tok = msg.text.split()[1]
-    sessions = load(SESSIONS_FILE)
-    if tok in sessions:
-        del sessions[tok]
-        save(SESSIONS_FILE, sessions)
-        bot.reply_to(msg, "🧹 Token removed")
+def delete_user(m):
+    if not is_owner(m): return
+    uid = m.text.split()[1]
+    db = Session()
+    db.query(VerifiedUser).filter_by(user_id=uid).delete()
+    db.query(Token).filter_by(user_id=uid).delete()
+    db.commit()
+    db.close()
+    bot.reply_to(m, "🗑 User removed")
 
 @bot.message_handler(commands=["list"])
-def list_users(msg):
-    if not is_owner(msg):
-        return
-    autoclean()
-    verified = load(VERIFIED_FILE)
-    if not verified:
-        bot.reply_to(msg, "No verified users")
-        return
-    now = int(time.time())
-    text = "📋 Verified users:\n\n"
-    for u, v in verified.items():
-        days = max(0, (v["expires"] - now) // 86400)
-        text += f"{u} — {days} days\n"
-    bot.reply_to(msg, text)
-
-@bot.message_handler(commands=["usage"])
-def usage_cmd(msg):
-    if not is_owner(msg):
-        return
-    parts = msg.text.split()
-    if len(parts) != 2:
-        bot.reply_to(msg, "Usage: /usage USER_ID")
-        return
-
-    uid = parts[1]
-    usage = load(USAGE_FILE).get(uid, [])
-
-    if not usage:
-        bot.reply_to(msg, "No usage data")
-        return
-
-    platforms = {}
-    for u in usage:
-        platforms[u["platform"]] = platforms.get(u["platform"], 0) + 1
-
-    text = f"📊 Usage for {uid}\n\nTotal: {len(usage)}\n\nPlatforms:\n"
-    for p, c in platforms.items():
-        text += f"- {p}: {c}\n"
-
-    bot.reply_to(msg, text)
+def list_users(m):
+    if not is_owner(m): return
+    db = Session()
+    users = db.query(VerifiedUser).all()
+    text = "📋 Verified Users\n\n"
+    for u in users:
+        days = max(0, (u.expires - int(time.time())) // 86400)
+        text += f"{u.user_id} — {days} days\n"
+    db.close()
+    bot.reply_to(m, text or "No users")
 
 @bot.message_handler(commands=["token"])
-def token(msg):
-    autoclean()
-    uid = str(msg.from_user.id)
-    sessions = load(SESSIONS_FILE)
+def token_cmd(m):
+    db = Session()
+    uid = str(m.from_user.id)
 
-    # ONE-TOKEN-AT-A-TIME
-    for t in list(sessions):
-        if sessions[t]["user_id"] == uid:
-            del sessions[t]
+    # one-token-at-a-time
+    db.query(Token).filter_by(user_id=uid).delete()
 
-    if msg.from_user.id == OWNER_ID:
-        tok = secrets.token_hex(24)
-        sessions[tok] = {"user_id": uid, "expires": None}
-        save(SESSIONS_FILE, sessions)
-        bot.reply_to(msg, f"👑 OWNER TOKEN:\n`{tok}`", parse_mode="Markdown")
+    if m.from_user.id == OWNER_ID:
+        t = secrets.token_hex(24)
+        db.add(Token(token=t, user_id=uid, expires=None))
+        db.commit()
+        db.close()
+        bot.reply_to(m, f"👑 OWNER TOKEN:\n`{t}`", parse_mode="Markdown")
         return
 
-    verified = load(VERIFIED_FILE)
-    if uid not in verified:
-        bot.reply_to(msg, "❌ Not verified")
+    user = db.query(VerifiedUser).filter_by(user_id=uid).first()
+    if not user or user.expires < int(time.time()):
+        bot.reply_to(m, "❌ Not verified")
+        db.close()
         return
 
-    tok = secrets.token_hex(24)
-    sessions[tok] = {"user_id": uid, "expires": verified[uid]["expires"]}
-    save(SESSIONS_FILE, sessions)
-    bot.reply_to(msg, f"🔐 TOKEN:\n`{tok}`", parse_mode="Markdown")
+    t = secrets.token_hex(24)
+    db.add(Token(token=t, user_id=uid, expires=user.expires))
+    db.commit()
+    db.close()
+    bot.reply_to(m, f"🔐 TOKEN:\n`{t}`", parse_mode="Markdown")
+
+@bot.message_handler(commands=["usage"])
+def usage(m):
+    if not is_owner(m): return
+    uid = m.text.split()[1]
+    db = Session()
+    logs = db.query(UsageLog).filter_by(user_id=uid).all()
+    db.close()
+    bot.reply_to(m, f"📊 Total usage: {len(logs)}")
+
+@bot.message_handler(commands=["remove"])
+def remove_token(m):
+    if not is_owner(m): return
+    tok = m.text.split()[1]
+    db = Session()
+    db.query(Token).filter_by(token=tok).delete()
+    db.commit()
+    db.close()
+    bot.reply_to(m, "🧹 Token removed")
 
 @bot.message_handler(commands=["cmds"])
-def cmds(msg):
-    if not is_owner(msg):
-        return
+def cmds(m):
+    if not is_owner(m): return
     bot.reply_to(
-        msg,
+        m,
         "👑 OWNER CMDS\n\n"
         "/verify USER_ID DAYS\n"
         "/del USER_ID\n"
@@ -195,36 +160,15 @@ def cmds(msg):
 # ================= FASTAPI =================
 app = FastAPI(title=API_NAME)
 
-def validate(token):
-    autoclean()
-    sessions = load(SESSIONS_FILE)
-    return token in sessions, sessions.get(token, {}).get("user_id")
-
-def cache_get(url):
-    cache = load(CACHE_FILE)
-    item = cache.get(url)
-    if item and time.time() - item["time"] < CACHE_TTL:
-        return item["data"]
-    return None
-
-def cache_set(url, data):
-    cache = load(CACHE_FILE)
-    cache[url] = {"time": time.time(), "data": data}
-    save(CACHE_FILE, cache)
-
-def log_usage(uid, platform, url):
-    usage = load(USAGE_FILE)
-    usage.setdefault(uid, []).append({
-        "time": int(time.time()),
-        "platform": platform,
-        "url": url
-    })
-    save(USAGE_FILE, usage)
-
 @app.get("/api/download")
 async def download(url: str = Query(None), token: str = Query(None)):
-    ok, uid = validate(token)
-    if not ok:
+    if not url or not token:
+        return {"status": "error", "message": "Missing params"}
+
+    db = Session()
+    t = db.query(Token).filter_by(token=token).first()
+    if not t or (t.expires and t.expires < int(time.time())):
+        db.close()
         return {
             "status": "blocked",
             "message": "❌ Not verified",
@@ -232,35 +176,38 @@ async def download(url: str = Query(None), token: str = Query(None)):
             "telegram": CONTACT
         }
 
-    if not url:
-        return {"status": "error", "message": "Missing url"}
-
-    cached = cache_get(url)
-    if cached:
-        cached["cached"] = True
-        return cached
+    cached = db.query(Cache).filter_by(url=url).first()
+    if cached and int(time.time()) - cached.time < CACHE_TTL:
+        db.close()
+        return eval(cached.response)
 
     with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    platform = info.get("extractor_key", "Unknown")
-
     result = {
         "status": "success",
-        "platform": platform,
+        "platform": info.get("extractor_key"),
         "title": info.get("title"),
         "duration": info.get("duration"),
         "filesize": info.get("filesize") or info.get("filesize_approx"),
         "thumbnail": info.get("thumbnail"),
         "video": info.get("url"),
         "audio": next(
-            (f["url"] for f in info.get("formats", []) if f.get("acodec") != "none"),
+            (f["url"] for f in info.get("formats", [])
+             if f.get("acodec") != "none"),
             None
         )
     }
 
-    cache_set(url, result)
-    log_usage(uid, platform, url)
+    db.add(Cache(url=url, response=str(result), time=int(time.time())))
+    db.add(UsageLog(
+        user_id=t.user_id,
+        platform=result["platform"],
+        url=url,
+        time=int(time.time())
+    ))
+    db.commit()
+    db.close()
     return result
 
 def start_bot():
