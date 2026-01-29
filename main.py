@@ -6,15 +6,16 @@ import time
 
 # ================= CONFIG =================
 API_NAME = "Universal Media Downloader API"
-API_VERSION = "1.5.1"
+API_VERSION = "2.0.0"
 DEVELOPER = "@xoxhunterxd"
 CONTACT_TG = "https://t.me/xoxhunterxd"
 
 KEYS_FILE = os.getenv("KEYS_PATH", "/tmp/keys.json")
+OWNER_MASTER_KEY = os.getenv("OWNER_MASTER_KEY")
 
 app = FastAPI(title=API_NAME)
 
-# ================= STORAGE (MATCH BOT EXACTLY) =================
+# ================= STORAGE =================
 def ensure_keys_file():
     os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
     if not os.path.exists(KEYS_FILE):
@@ -33,16 +34,19 @@ def save_keys(data):
 
 def cleanup_expired(keys):
     now = int(time.time())
-    removed = False
-
+    changed = False
     for k in list(keys.keys()):
         if now > keys[k]["expires"]:
             del keys[k]
-            removed = True
+            changed = True
+    return changed
 
-    return removed
-
+# ================= KEY VALIDATION =================
 def validate_key(api_key: str):
+    # 🔐 OWNER MASTER KEY (HIDDEN, NO EXPIRY)
+    if OWNER_MASTER_KEY and api_key == OWNER_MASTER_KEY:
+        return True, None
+
     if not api_key:
         return False, "missing"
 
@@ -61,19 +65,17 @@ def validate_key(api_key: str):
 
     keys[api_key]["used"] += 1
     save_keys(keys)
-
     return True, None
 
 # ================= BLOCK RESPONSE =================
 def blocked(reason):
     return {
         "status": "blocked",
-        "reason": reason,
         "message": {
             "missing": "❌ API key missing",
             "invalid": "❌ Invalid API key",
             "expired": "⏰ API key expired"
-        }.get(reason),
+        }.get(reason, "❌ Access denied"),
         "help": "🔑 This API is private",
         "contact_owner": DEVELOPER,
         "telegram": CONTACT_TG
