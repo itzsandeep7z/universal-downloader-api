@@ -11,19 +11,19 @@ from fastapi import FastAPI, Query
 from sqlalchemy import create_engine, Column, Integer, String, BigInteger, Text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# ================== ENV CONFIG ==================
+# ===================== ENV =====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 RUN_BOT = os.getenv("RUN_BOT", "true") == "true"
 
-API_NAME = "Universal Downloader API"
-OWNER = "@xoxhunterxd"
-CONTACT = "https://t.me/xoxhunterxd"
+API_NAME = "UNIVERSAL MEDIA DOWNLOADER API"
+OWNER_TAG = "@xoxhunterxd"
+CONTACT_TG = "https://t.me/xoxhunterxd"
 
 CACHE_TTL = 600  # 10 minutes
 
-# ================== DATABASE ==================
+# ===================== DATABASE =====================
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 Session = sessionmaker(bind=engine)
 Base = declarative_base()
@@ -60,7 +60,7 @@ class Cache(Base):
 
 Base.metadata.create_all(engine)
 
-# ================== TELEGRAM BOT ==================
+# ===================== TELEGRAM BOT =====================
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 
 
@@ -74,7 +74,7 @@ def cmds(m):
         return
     bot.reply_to(
         m,
-        "👑 OWNER CMDS\n\n"
+        "👑 OWNER COMMANDS\n\n"
         "/verify USER_ID DAYS\n"
         "/del USER_ID\n"
         "/list\n"
@@ -110,7 +110,7 @@ def delete_user(m):
     db.query(Token).filter_by(user_id=uid).delete()
     db.commit()
     db.close()
-    bot.reply_to(m, f"🗑 Removed {uid}")
+    bot.reply_to(m, f"🗑 User {uid} removed")
 
 
 @bot.message_handler(commands=["list"])
@@ -125,7 +125,7 @@ def list_users(m):
         days = max(0, (u.expires - now) // 86400)
         text += f"{u.user_id} → {days} days\n"
     db.close()
-    bot.reply_to(m, text or "No users")
+    bot.reply_to(m, text or "No verified users")
 
 
 @bot.message_handler(commands=["usage"])
@@ -180,7 +180,7 @@ def token_cmd(m):
     bot.reply_to(m, f"🔐 TOKEN\n`{t}`", parse_mode="Markdown")
 
 
-# ================== FASTAPI ==================
+# ===================== FASTAPI =====================
 app = FastAPI(title=API_NAME)
 
 
@@ -191,13 +191,14 @@ async def download(url: str = Query(None), token: str = Query(None)):
 
     db = Session()
     t = db.query(Token).filter_by(token=token).first()
+
     if not t or (t.expires and t.expires < int(time.time())):
         db.close()
         return {
             "status": "blocked",
             "message": "❌ Not verified",
-            "contact_owner": OWNER,
-            "telegram": CONTACT
+            "contact_owner": OWNER_TAG,
+            "telegram": CONTACT_TG
         }
 
     cached = db.query(Cache).filter_by(url=url).first()
@@ -208,34 +209,60 @@ async def download(url: str = Query(None), token: str = Query(None)):
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
-        "format": "bestvideo+bestaudio/best"
+        "noplaylist": True,
+        "http_headers": {"User-Agent": "Mozilla/5.0"}
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
+    extractor = (info.get("extractor_key") or "").lower()
+    is_music = (
+        "music" in extractor
+        or info.get("is_music_track") is True
+        or info.get("vcodec") == "none"
+    )
+
     formats = info.get("formats", [])
     video_url = None
     audio_url = None
 
-    for f in formats:
-        if f.get("vcodec") != "none" and f.get("url"):
-            video_url = f["url"]
-            break
+    if is_music:
+        for f in formats:
+            if f.get("acodec") != "none" and f.get("vcodec") == "none":
+                audio_url = f.get("url")
+                break
+    else:
+        for f in formats:
+            if f.get("acodec") != "none" and f.get("vcodec") != "none":
+                video_url = f.get("url")
+                break
 
-    for f in formats:
-        if f.get("acodec") != "none" and f.get("vcodec") == "none" and f.get("url"):
-            audio_url = f["url"]
-            break
+        if not video_url:
+            for f in formats:
+                if f.get("vcodec") != "none":
+                    video_url = f.get("url")
+                    break
+            for f in formats:
+                if f.get("acodec") != "none" and f.get("vcodec") == "none":
+                    audio_url = f.get("url")
+                    break
 
     result = {
         "status": "success",
         "platform": info.get("extractor_key"),
+        "type": "music" if is_music else "video",
         "title": info.get("title"),
         "duration": info.get("duration"),
         "thumbnail": info.get("thumbnail"),
         "video": video_url,
-        "audio": audio_url
+        "audio": audio_url,
+
+        "________________________________________": "",
+        "████████████████████████████████████████": "",
+        "█      DEVELOPED  BY  XOXHUNTERXD      █": "",
+        "█          @xoxhunterxd (TG)           █": "",
+        "████████████████████████████████████████": ""
     }
 
     if cached:
@@ -260,7 +287,7 @@ async def download(url: str = Query(None), token: str = Query(None)):
     return result
 
 
-# ================== START SERVICES ==================
+# ===================== START =====================
 def start_bot():
     bot.infinity_polling(skip_pending=True)
 
