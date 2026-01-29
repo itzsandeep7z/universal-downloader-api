@@ -8,8 +8,8 @@ API_NAME = "Universal Media Downloader API"
 OWNER = "@xoxhunterxd"
 CONTACT = "https://t.me/xoxhunterxd"
 
-SESSIONS_FILE = "sessions.json"
-USAGE_FILE = "usage.json"
+SESSIONS_FILE = "/tmp/sessions.json"
+USAGE_FILE = "/tmp/usage.json"
 
 app = FastAPI(title=API_NAME)
 
