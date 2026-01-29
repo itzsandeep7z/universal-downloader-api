@@ -4,8 +4,8 @@ import os
 import secrets
 import time
 
-BOT_TOKEN = "8496179658:AAFUMyVFhi_T2aVC7QSyBaqKNCvmjP-yH4o"
-OWNER_ID = 6021047784
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID"))
 KEYS_FILE = "keys.json"
 
 bot = telebot.TeleBot(BOT_TOKEN)
