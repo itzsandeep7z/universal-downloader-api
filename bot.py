@@ -13,63 +13,100 @@ SESSIONS_FILE = "sessions.json"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ---------- FILE UTILS ----------
-def load_file(path):
+def load(path):
     if not os.path.exists(path):
         return {}
     with open(path, "r") as f:
         return json.load(f)
 
-def save_file(path, data):
+def save(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
-# ---------- OWNER CHECK ----------
 def is_owner(msg):
     return msg.from_user.id == OWNER_ID
 
-# ---------- COMMANDS ----------
+# ---------- VERIFY USER ----------
 @bot.message_handler(commands=["verify"])
-def verify_user(message):
+def verify(message):
     if not is_owner(message):
         return
 
     parts = message.text.split()
-    if len(parts) != 2:
-        bot.reply_to(message, "Usage: /verify USER_ID")
+    if len(parts) != 3 or not parts[2].isdigit():
+        bot.reply_to(message, "Usage: /verify USER_ID DAYS")
         return
 
     user_id = parts[1]
-    verified = load_file(VERIFIED_FILE)
-    verified[user_id] = True
-    save_file(VERIFIED_FILE, verified)
+    days = int(parts[2])
 
-    bot.reply_to(message, f"✅ User {user_id} verified")
+    expires = int(time.time()) + days * 86400
+    verified = load(VERIFIED_FILE)
 
+    verified[user_id] = {
+        "expires": expires
+    }
+
+    save(VERIFIED_FILE, verified)
+    bot.reply_to(message, f"✅ User {user_id} verified for {days} days")
+
+# ---------- GENERATE TOKEN ----------
 @bot.message_handler(commands=["token"])
-def get_token(message):
+def token(message):
     user_id = str(message.from_user.id)
-    verified = load_file(VERIFIED_FILE)
+    now = int(time.time())
+
+    # OWNER → NO EXPIRY
+    if message.from_user.id == OWNER_ID:
+        token = secrets.token_hex(24)
+        sessions = load(SESSIONS_FILE)
+        sessions[token] = {
+            "user_id": user_id,
+            "expires": None  # no expiry
+        }
+        save(SESSIONS_FILE, sessions)
+
+        bot.reply_to(
+            message,
+            f"👑 OWNER TOKEN (NO EXPIRY):\n`{token}`",
+            parse_mode="Markdown"
+        )
+        return
+
+    # NORMAL USER
+    verified = load(VERIFIED_FILE)
 
     if user_id not in verified:
         bot.reply_to(message, "❌ You are not verified")
         return
 
-    token = secrets.token_hex(16)
-    sessions = load_file(SESSIONS_FILE)
+    if now > verified[user_id]["expires"]:
+        del verified[user_id]
+        save(VERIFIED_FILE, verified)
+        bot.reply_to(message, "⏰ Your verification expired")
+        return
+
+    token = secrets.token_hex(24)
+    sessions = load(SESSIONS_FILE)
 
     sessions[token] = {
         "user_id": user_id,
-        "expires": int(time.time()) + 600  # 10 minutes
+        "expires": verified[user_id]["expires"]
     }
 
-    save_file(SESSIONS_FILE, sessions)
+    save(SESSIONS_FILE, sessions)
+
+    left_days = (verified[user_id]["expires"] - now) // 86400
 
     bot.reply_to(
         message,
-        f"🔐 Access token (10 min):\n`{token}`",
+        f"🔐 Token generated\n"
+        f"Valid for {left_days} days\n\n"
+        f"`{token}`",
         parse_mode="Markdown"
     )
 
+# ---------- OWNER COMMANDS ----------
 @bot.message_handler(commands=["cmds"])
 def cmds(message):
     if not is_owner(message):
@@ -77,9 +114,9 @@ def cmds(message):
 
     bot.reply_to(
         message,
-        "/verify USER_ID – verify user\n"
-        "/token – generate API token\n"
-        "/cmds – owner commands"
+        "/verify USER_ID DAYS – verify user\n"
+        "/token – get owner token\n"
+        "/cmds – show commands"
     )
 
 bot.infinity_polling()
