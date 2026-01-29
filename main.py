@@ -120,7 +120,7 @@ async def download(url: str = Query(None), token: str = Query(None)):
         "status": "success",
         "title": info.get("title"),
         "media_url": info.get("url"),
-        "developer": xoxhunterxd.t.me
+        "developer": OWNER
     }
 
 # ================= RUN BOTH =================
