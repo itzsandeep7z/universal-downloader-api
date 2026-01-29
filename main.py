@@ -6,16 +6,17 @@ import time
 
 # ================= CONFIG =================
 API_NAME = "Universal Media Downloader API"
-API_VERSION = "1.5.0"
+API_VERSION = "1.5.1"
 DEVELOPER = "@xoxhunterxd"
 CONTACT_TG = "https://t.me/xoxhunterxd"
 
-KEYS_FILE = os.getenv("KEYS_PATH", "keys.json")
+KEYS_FILE = os.getenv("KEYS_PATH", "/tmp/keys.json")
 
 app = FastAPI(title=API_NAME)
 
-# ================= KEY STORAGE =================
+# ================= STORAGE (MATCH BOT EXACTLY) =================
 def ensure_keys_file():
+    os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
     if not os.path.exists(KEYS_FILE):
         with open(KEYS_FILE, "w") as f:
             json.dump({}, f)
@@ -26,6 +27,7 @@ def load_keys():
         return json.load(f)
 
 def save_keys(data):
+    ensure_keys_file()
     with open(KEYS_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -62,7 +64,7 @@ def validate_key(api_key: str):
 
     return True, None
 
-# ================= STYLISH BLOCK =================
+# ================= BLOCK RESPONSE =================
 def blocked(reason):
     return {
         "status": "blocked",
