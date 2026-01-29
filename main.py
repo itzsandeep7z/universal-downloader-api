@@ -185,6 +185,8 @@ async def download(url: str = Query(None), token: str = Query(None)):
         info = ydl.extract_info(url, download=False)
 
     result = {
+        "Developed By": OWNER,
+        
         "status": "success",
         "platform": info.get("extractor_key"),
         "title": info.get("title"),
