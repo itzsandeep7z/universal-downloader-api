@@ -43,12 +43,50 @@ def verify(message):
     expires = int(time.time()) + days * 86400
     verified = load(VERIFIED_FILE)
 
-    verified[user_id] = {
-        "expires": expires
-    }
+    verified[user_id] = {"expires": expires}
+    save(VERIFIED_FILE, verified)
+
+    bot.reply_to(message, f"✅ User {user_id} verified for {days} days")
+
+# ---------- DELETE USER ----------
+@bot.message_handler(commands=["del"])
+def delete_user(message):
+    if not is_owner(message):
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        bot.reply_to(message, "Usage: /del USER_ID")
+        return
+
+    user_id = parts[1]
+
+    verified = load(VERIFIED_FILE)
+    sessions = load(SESSIONS_FILE)
+
+    removed_verify = False
+    removed_tokens = 0
+
+    if user_id in verified:
+        del verified[user_id]
+        removed_verify = True
+
+    for token in list(sessions.keys()):
+        if sessions[token]["user_id"] == user_id:
+            del sessions[token]
+            removed_tokens += 1
 
     save(VERIFIED_FILE, verified)
-    bot.reply_to(message, f"✅ User {user_id} verified for {days} days")
+    save(SESSIONS_FILE, sessions)
+
+    if removed_verify or removed_tokens:
+        bot.reply_to(
+            message,
+            f"🗑 User {user_id} removed\n"
+            f"Tokens revoked: {removed_tokens}"
+        )
+    else:
+        bot.reply_to(message, "❌ User not found")
 
 # ---------- GENERATE TOKEN ----------
 @bot.message_handler(commands=["token"])
@@ -56,14 +94,16 @@ def token(message):
     user_id = str(message.from_user.id)
     now = int(time.time())
 
-    # OWNER → NO EXPIRY
+    # 👑 OWNER → NO EXPIRY
     if message.from_user.id == OWNER_ID:
         token = secrets.token_hex(24)
         sessions = load(SESSIONS_FILE)
+
         sessions[token] = {
             "user_id": user_id,
-            "expires": None  # no expiry
+            "expires": None
         }
+
         save(SESSIONS_FILE, sessions)
 
         bot.reply_to(
@@ -73,7 +113,6 @@ def token(message):
         )
         return
 
-    # NORMAL USER
     verified = load(VERIFIED_FILE)
 
     if user_id not in verified:
@@ -96,17 +135,17 @@ def token(message):
 
     save(SESSIONS_FILE, sessions)
 
-    left_days = (verified[user_id]["expires"] - now) // 86400
+    days_left = (verified[user_id]["expires"] - now) // 86400
 
     bot.reply_to(
         message,
         f"🔐 Token generated\n"
-        f"Valid for {left_days} days\n\n"
+        f"Valid for {days_left} days\n\n"
         f"`{token}`",
         parse_mode="Markdown"
     )
 
-# ---------- OWNER COMMANDS ----------
+# ---------- COMMAND LIST ----------
 @bot.message_handler(commands=["cmds"])
 def cmds(message):
     if not is_owner(message):
@@ -114,7 +153,9 @@ def cmds(message):
 
     bot.reply_to(
         message,
+        "👑 OWNER COMMANDS\n\n"
         "/verify USER_ID DAYS – verify user\n"
+        "/del USER_ID – remove user & revoke tokens\n"
         "/token – get owner token\n"
         "/cmds – show commands"
     )
