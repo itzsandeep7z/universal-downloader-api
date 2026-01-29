@@ -9,6 +9,7 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 
 VERIFIED_FILE = "verified.json"
 SESSIONS_FILE = "sessions.json"
+USAGE_FILE = "usage.json"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -26,6 +27,25 @@ def save(path, data):
 def is_owner(msg):
     return msg.from_user.id == OWNER_ID
 
+def autoclean():
+    now = int(time.time())
+    verified = load(VERIFIED_FILE)
+    sessions = load(SESSIONS_FILE)
+
+    # clean expired verified users
+    for uid in list(verified.keys()):
+        if now > verified[uid]["expires"]:
+            del verified[uid]
+
+    # clean expired sessions
+    for tok in list(sessions.keys()):
+        exp = sessions[tok]["expires"]
+        if exp is not None and now > exp:
+            del sessions[tok]
+
+    save(VERIFIED_FILE, verified)
+    save(SESSIONS_FILE, sessions)
+
 # ---------- VERIFY USER ----------
 @bot.message_handler(commands=["verify"])
 def verify(message):
@@ -37,16 +57,15 @@ def verify(message):
         bot.reply_to(message, "Usage: /verify USER_ID DAYS")
         return
 
-    user_id = parts[1]
+    uid = parts[1]
     days = int(parts[2])
-
     expires = int(time.time()) + days * 86400
-    verified = load(VERIFIED_FILE)
 
-    verified[user_id] = {"expires": expires}
+    verified = load(VERIFIED_FILE)
+    verified[uid] = {"expires": expires}
     save(VERIFIED_FILE, verified)
 
-    bot.reply_to(message, f"✅ User {user_id} verified for {days} days")
+    bot.reply_to(message, f"✅ User {uid} verified for {days} days")
 
 # ---------- DELETE USER ----------
 @bot.message_handler(commands=["del"])
@@ -59,105 +78,109 @@ def delete_user(message):
         bot.reply_to(message, "Usage: /del USER_ID")
         return
 
-    user_id = parts[1]
-
+    uid = parts[1]
     verified = load(VERIFIED_FILE)
     sessions = load(SESSIONS_FILE)
 
-    removed_verify = False
-    removed_tokens = 0
+    if uid in verified:
+        del verified[uid]
 
-    if user_id in verified:
-        del verified[user_id]
-        removed_verify = True
-
-    for token in list(sessions.keys()):
-        if sessions[token]["user_id"] == user_id:
-            del sessions[token]
-            removed_tokens += 1
+    removed = 0
+    for t in list(sessions.keys()):
+        if sessions[t]["user_id"] == uid:
+            del sessions[t]
+            removed += 1
 
     save(VERIFIED_FILE, verified)
     save(SESSIONS_FILE, sessions)
 
-    if removed_verify or removed_tokens:
-        bot.reply_to(
-            message,
-            f"🗑 User {user_id} removed\n"
-            f"Tokens revoked: {removed_tokens}"
-        )
+    bot.reply_to(message, f"🗑 User {uid} removed | Tokens revoked: {removed}")
+
+# ---------- REMOVE TOKEN ----------
+@bot.message_handler(commands=["remove"])
+def remove_token(message):
+    if not is_owner(message):
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        bot.reply_to(message, "Usage: /remove TOKEN")
+        return
+
+    tok = parts[1]
+    sessions = load(SESSIONS_FILE)
+
+    if tok in sessions:
+        del sessions[tok]
+        save(SESSIONS_FILE, sessions)
+        bot.reply_to(message, "🧹 Token removed")
     else:
-        bot.reply_to(message, "❌ User not found")
+        bot.reply_to(message, "❌ Token not found")
+
+# ---------- LIST VERIFIED USERS ----------
+@bot.message_handler(commands=["list"])
+def list_verified(message):
+    if not is_owner(message):
+        return
+
+    autoclean()
+    verified = load(VERIFIED_FILE)
+
+    if not verified:
+        bot.reply_to(message, "No verified users")
+        return
+
+    now = int(time.time())
+    text = "📋 Verified users:\n\n"
+    for uid, v in verified.items():
+        days = max(0, (v["expires"] - now) // 86400)
+        text += f"{uid} — {days} days left\n"
+
+    bot.reply_to(message, text)
 
 # ---------- GENERATE TOKEN ----------
 @bot.message_handler(commands=["token"])
 def token(message):
-    user_id = str(message.from_user.id)
+    autoclean()
+    uid = str(message.from_user.id)
     now = int(time.time())
 
-    # 👑 OWNER → NO EXPIRY
+    sessions = load(SESSIONS_FILE)
+
+    # OWNER → no expiry
     if message.from_user.id == OWNER_ID:
-        token = secrets.token_hex(24)
-        sessions = load(SESSIONS_FILE)
-
-        sessions[token] = {
-            "user_id": user_id,
-            "expires": None
-        }
-
+        tok = secrets.token_hex(24)
+        sessions[tok] = {"user_id": uid, "expires": None}
         save(SESSIONS_FILE, sessions)
-
-        bot.reply_to(
-            message,
-            f"👑 OWNER TOKEN (NO EXPIRY):\n`{token}`",
-            parse_mode="Markdown"
-        )
+        bot.reply_to(message, f"👑 OWNER TOKEN:\n`{tok}`", parse_mode="Markdown")
         return
 
     verified = load(VERIFIED_FILE)
-
-    if user_id not in verified:
+    if uid not in verified or now > verified[uid]["expires"]:
         bot.reply_to(message, "❌ You are not verified")
         return
 
-    if now > verified[user_id]["expires"]:
-        del verified[user_id]
-        save(VERIFIED_FILE, verified)
-        bot.reply_to(message, "⏰ Your verification expired")
-        return
-
-    token = secrets.token_hex(24)
-    sessions = load(SESSIONS_FILE)
-
-    sessions[token] = {
-        "user_id": user_id,
-        "expires": verified[user_id]["expires"]
-    }
-
+    tok = secrets.token_hex(24)
+    sessions[tok] = {"user_id": uid, "expires": verified[uid]["expires"]}
     save(SESSIONS_FILE, sessions)
 
-    days_left = (verified[user_id]["expires"] - now) // 86400
+    days = (verified[uid]["expires"] - now) // 86400
+    bot.reply_to(message, f"🔐 Token valid {days} days:\n`{tok}`", parse_mode="Markdown")
 
-    bot.reply_to(
-        message,
-        f"🔐 Token generated\n"
-        f"Valid for {days_left} days\n\n"
-        f"`{token}`",
-        parse_mode="Markdown"
-    )
-
-# ---------- COMMAND LIST ----------
+# ---------- OWNER COMMANDS ----------
 @bot.message_handler(commands=["cmds"])
 def cmds(message):
     if not is_owner(message):
         return
-
     bot.reply_to(
         message,
-        "👑 OWNER COMMANDS\n\n"
-        "/verify USER_ID DAYS – verify user\n"
-        "/del USER_ID – remove user & revoke tokens\n"
-        "/token – get owner token\n"
-        "/cmds – show commands"
+        "👑 OWNER CMDS\n"
+        "/verify USER_ID DAYS\n"
+        "/del USER_ID\n"
+        "/list\n"
+        "/remove TOKEN\n"
+        "/token\n"
+        "/cmds"
     )
 
 bot.infinity_polling()
