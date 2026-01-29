@@ -9,54 +9,58 @@ OWNER = "@xoxhunterxd"
 CONTACT = "https://t.me/xoxhunterxd"
 
 SESSIONS_FILE = "sessions.json"
+USAGE_FILE = "usage.json"
 
 app = FastAPI(title=API_NAME)
 
-# ---------- SESSION UTILS ----------
-def load_sessions():
-    if not os.path.exists(SESSIONS_FILE):
+def load(path):
+    if not os.path.exists(path):
         return {}
-    with open(SESSIONS_FILE, "r") as f:
+    with open(path, "r") as f:
         return json.load(f)
 
-def save_sessions(data):
-    with open(SESSIONS_FILE, "w") as f:
+def save(path, data):
+    with open(path, "w") as f:
         json.dump(data, f, indent=2)
+
+def autoclean():
+    sessions = load(SESSIONS_FILE)
+    now = int(time.time())
+    for t in list(sessions.keys()):
+        exp = sessions[t]["expires"]
+        if exp is not None and now > exp:
+            del sessions[t]
+    save(SESSIONS_FILE, sessions)
 
 def validate_token(token):
     if not token:
-        return False
+        return False, None
 
-    sessions = load_sessions()
-    now = int(time.time())
-
+    autoclean()
+    sessions = load(SESSIONS_FILE)
     if token not in sessions:
-        return False
+        return False, None
 
-    exp = sessions[token]["expires"]
+    return True, sessions[token]["user_id"]
 
-    # OWNER TOKEN → no expiry
-    if exp is None:
-        return True
+def log_usage(user_id, url):
+    logs = load(USAGE_FILE)
+    logs.setdefault(str(user_id), []).append({
+        "time": int(time.time()),
+        "url": url
+    })
+    save(USAGE_FILE, logs)
 
-    if now > exp:
-        del sessions[token]
-        save_sessions(sessions)
-        return False
-
-    return True
-
-# ---------- API ----------
 @app.get("/api/download")
 async def download(
     url: str = Query(None),
     token: str = Query(None)
 ):
-    if not validate_token(token):
+    ok, user_id = validate_token(token)
+    if not ok:
         return {
             "status": "blocked",
             "message": "❌ Not verified",
-            "help": "Verify via Telegram bot",
             "contact_owner": OWNER,
             "telegram": CONTACT
         }
@@ -64,11 +68,10 @@ async def download(
     if not url:
         return {"status": "error", "message": "Missing url"}
 
-    with yt_dlp.YoutubeDL({
-        "quiet": True,
-        "skip_download": True
-    }) as ydl:
+    with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
         info = ydl.extract_info(url, download=False)
+
+    log_usage(user_id, url)
 
     return {
         "status": "success",
